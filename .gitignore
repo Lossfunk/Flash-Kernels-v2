@@ -1,0 +1,22 @@
+   # Python virtual-env
+.venv/
+.env
+venv
+
+# Ignore Python cache directories
+__pycache__/
+**/__pycache__/
+
+# Ignore Triton compilation temp directories
+tmp_compile_inputs/
+tmp_compile_outputs/
+tmp_compile_kernel_sources/
+
+# Ignore LLM synthesis outputs
+tmp_synthesis_outputs/
+
+# Ignore package-lock if present
+package-lock.json
+
+# Ignore front-end build artifacts
+adk-web/.angular/

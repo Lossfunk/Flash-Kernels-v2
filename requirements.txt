@@ -1,0 +1,37 @@
+google-adk>=1.0.0
+fastapi
+uvicorn[standard]
+# Optional dependency for real compilation
+triton
+google-generativeai
+numpy<2  # Fix NumPy 1.x vs 2.x compatibility issues 
+anthropic
+modal
+openai
+packaging
+pydra_config
+torch
+tqdm
+datasets
+transformers
+google-generativeai
+together
+pytest
+ninja
+archon-ai
+einops
+setuptools
+requests>=2.31
+beautifulsoup4  # Not mandatory but often helpful for parsing search results
+
+# Enhanced web search dependencies (following HuggingFace smolagents approach)
+markdownify  # For converting HTML to markdown (used in smolagents text_web_browser.py)
+selenium>=4.0.0     # For advanced web browser automation (optional, used in smolagents for complex interactions)
+python-dotenv       # For environment variable management
+urllib3>=1.26.0     # Enhanced URL handling
+html2text           # Alternative HTML to text conversion
+lxml                # Better HTML/XML parsing
+cssselect           # CSS selector support for web scraping
+
+pyyaml              # For performance report persistence
+llnl-hatchet

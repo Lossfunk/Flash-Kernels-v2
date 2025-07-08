@@ -1,0 +1,18 @@
+# Kernel Development System – Configuration
+# ------------------------------------------------------------
+# Only settings consumed by the current codebase are kept here.
+# ------------------------------------------------------------
+
+# -------- LLM / Provider -------------
+LLM_PROVIDER: "anthropic"             # "gemini" | "openrouter" | "anthropic" | "openai"
+LLM_MODEL: "claude-sonnet-4-20250514" # explicit model name
+LLM_TEMPERATURE: 0.2                   # Some experimental OpenAI models only allow default temperature
+LLM_MAX_TOKENS: 16384                # Generation token limit for all providers
+
+# -------- Logging --------------------
+LOG_LEVEL: "DEBUG"                     # DEBUG | INFO | WARNING | ERROR
+
+# -------- Pipeline limits -------------
+SYNTHESIS_MAX_ATTEMPTS: 15      # Max retries for synth/compile loop
+BENCHMARK_WARMUP_RUNS: 10       # Warm-up iterations before timing
+BENCHMARK_TIMING_RUNS: 100      # Measured iterations for timing stats
