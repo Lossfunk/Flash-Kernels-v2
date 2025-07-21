@@ -22,7 +22,8 @@ archon-ai
 einops
 setuptools
 requests>=2.31
-beautifulsoup4  # Not mandatory but often helpful for parsing search results
+beautifulsoup4
+seaborn  # Not mandatory but often helpful for parsing search results
 
 # Enhanced web search dependencies (following HuggingFace smolagents approach)
 markdownify  # For converting HTML to markdown (used in smolagents text_web_browser.py)

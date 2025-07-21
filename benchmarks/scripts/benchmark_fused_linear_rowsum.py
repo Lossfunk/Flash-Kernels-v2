@@ -1,5 +1,5 @@
 import torch
-import torch.utils.benchmark as benchmark
+import triton
 import sys
 import os
 
@@ -21,32 +21,9 @@ from new_kernels.fused_linear_rowsum.Functional.fused_linear_rowsum import Fused
 device = infer_device()
 
 
-def _extract_quantiles_from_measurement(measurement, quantiles: list[float] = [0.5, 0.2, 0.8]):
-    """Extract selected quantiles (in ms) from a torch.utils.benchmark.Measurement."""
-    # Convert seconds to milliseconds
-    times_ms = [t * 1000 for t in measurement.raw_times]
-    times_tensor = torch.tensor(times_ms, dtype=torch.float32)
-
-    quantile_values = torch.quantile(times_tensor, torch.tensor(quantiles, dtype=torch.float32))
-    return (
-        quantile_values[0].item(),
-        quantile_values[1].item(),
-        quantile_values[2].item(),
-    )
-
-
-def _run_pytorch_benchmark(stmt_fn, globals_dict, label: str, description: str):
-    """Utility that wraps torch.utils.benchmark for adaptive timing benchmarking."""
-    timer = benchmark.Timer(
-        stmt="stmt_fn()",
-        globals=globals_dict,
-        label=label,
-        description=description,
-        num_threads=1,  # single-threaded for reproducible results
-    )
-
-    measurement = timer.blocked_autorange()
-    return _extract_quantiles_from_measurement(measurement, QUANTILES)
+# -----------------------------------------------------------------------------
+# Replaced torch.utils.benchmark utilities with Triton's do_bench for timing.
+# -----------------------------------------------------------------------------
 
 
 def bench_speed_fused_linear_rowsum(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput:
@@ -84,11 +61,11 @@ def bench_speed_fused_linear_rowsum(input: SingleBenchmarkRunInput) -> SingleBen
         torch.cuda.synchronize()
 
     if mode == "forward":
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             y_fwd,
-            {"stmt_fn": y_fwd, "x": x},
-            label=f"FusedLinearRowSum Forward ({provider})",
-            description=f"batch_size={batch_size}, input_dim={input_dim}, output_dim={output_dim}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     elif mode == "backward":
         y = y_fwd()
@@ -98,12 +75,11 @@ def bench_speed_fused_linear_rowsum(input: SingleBenchmarkRunInput) -> SingleBen
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
-        backward_fn = lambda: y.backward(dy, retain_graph=True)
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
-            backward_fn,
-            {"stmt_fn": backward_fn, "x": x, "y": y, "dy": dy},
-            label=f"FusedLinearRowSum Backward ({provider})",
-            description=f"batch_size={batch_size}, input_dim={input_dim}, output_dim={output_dim}, dtype={dtype}",
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
+            lambda: y.backward(dy, retain_graph=True),
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     elif mode == "full":
         def full():
@@ -116,14 +92,20 @@ def bench_speed_fused_linear_rowsum(input: SingleBenchmarkRunInput) -> SingleBen
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             full,
-            {"stmt_fn": full, "x": x, "dy": dy},
-            label=f"FusedLinearRowSum Full ({provider})",
-            description=f"batch_size={batch_size}, input_dim={input_dim}, output_dim={output_dim}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     else:
         raise ValueError(f"Unknown kernel operation mode: {mode}")
+
+    # Fail fast if Triton produced None timings
+    if any(val is None for val in (ms_20, ms_50, ms_80)):
+        raise RuntimeError(
+            f"Benchmark speed result is None: ms_20={ms_20}, ms_50={ms_50}, ms_80={ms_80}"
+        )
 
     return SingleBenchmarkRunOutput(y_20=ms_20, y_50=ms_50, y_80=ms_80)
 

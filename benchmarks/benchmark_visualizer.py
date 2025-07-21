@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import re
 
 from argparse import ArgumentParser
 from dataclasses import dataclass
@@ -205,6 +206,7 @@ def plot_data(df: pd.DataFrame, config: VisualizationsConfig):
 
     xlabel = df["x_label"].iloc[0]
     ylabel = f"{config.metric_name} ({df['metric_unit'].iloc[0]})"
+
     # Sort by "kernel_provider" to ensure consistent color assignment
     df = df.sort_values(by="kernel_provider")
 
@@ -254,9 +256,17 @@ def plot_data(df: pd.DataFrame, config: VisualizationsConfig):
     plt.ylabel(ylabel)
     plt.tight_layout()
 
+    # If we are producing many plots for different extra-configs, encode that information
+    # into the filename so that files do not overwrite one another.
+    suffix = ""
+    if config.extra_config_filter:
+        # Create a filesystem-friendly tag, keep alnum characters only
+        safe_str = re.sub(r"[^0-9a-zA-Z]+", "_", str(config.extra_config_filter)).strip("_")
+        suffix = f"_{safe_str}"
+
     out_path = os.path.join(
         VISUALIZATIONS_PATH,
-        f"{config.kernel_name}_{config.metric_name}_{config.kernel_operation_mode}.png",
+        f"{config.kernel_name}_{config.metric_name}_{config.kernel_operation_mode}{suffix}.png",
     )
 
     if config.display:
@@ -286,15 +296,31 @@ def main():
             sys.exit(1)
 
     for mode in modes:
-        config = VisualizationsConfig(
-            kernel_name=args.kernel_name,
-            metric_name=args.metric_name,
-            kernel_operation_mode=mode,
-            display=args.display,
-            overwrite=args.overwrite,
-        )
-        df = load_data(config)
-        plot_data(df, config)
+        # Determine which extra configs to iterate over.
+        if args.extra_config_filter:
+            extra_config_list = [args.extra_config_filter]
+        else:
+            mode_df = all_df[
+                (all_df["kernel_name"] == args.kernel_name)
+                & (all_df["metric_name"] == args.metric_name)
+                & (all_df["kernel_operation_mode"] == mode)
+            ]
+            extra_config_list = mode_df["extra_benchmark_config_str"].unique().tolist()
+
+        for extra_cfg in extra_config_list:
+            config = VisualizationsConfig(
+                kernel_name=args.kernel_name,
+                metric_name=args.metric_name,
+                kernel_operation_mode=mode,
+                extra_config_filter=extra_cfg,
+                display=args.display,
+                overwrite=args.overwrite,
+            )
+            try:
+                df = load_data(config)
+                plot_data(df, config)
+            except ValueError as e:
+                print(f"Skipping extra_config due to error: {e}")
 
 
 if __name__ == "__main__":

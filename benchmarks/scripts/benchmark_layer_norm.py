@@ -1,6 +1,5 @@
 import torch
 import triton
-import torch.utils.benchmark as benchmark
 import sys
 import os
 
@@ -19,54 +18,10 @@ from new_kernels.layer_norm.Functional.layer_norm import LayerNorm
 
 device = infer_device()
 
-def _extract_quantiles_from_measurement(measurement, quantiles=[0.5, 0.2, 0.8]):
-    """
-    Extract quantiles from a torch.utils.benchmark.Measurement object.
-    
-    Args:
-        measurement: torch.utils.benchmark.Measurement object
-        quantiles: List of quantiles to extract [median, 20th percentile, 80th percentile]
-    
-    Returns:
-        Tuple of (median, 20th_percentile, 80th_percentile) in milliseconds
-    """
-    # Convert seconds to milliseconds
-    times_ms = [t * 1000 for t in measurement.raw_times]
-    times_tensor = torch.tensor(times_ms, dtype=torch.float32)
-    
-    # Calculate quantiles
-    quantile_values = torch.quantile(times_tensor, torch.tensor(quantiles, dtype=torch.float32))
-    print(quantile_values)
-    
-    return quantile_values[0].item(), quantile_values[1].item(), quantile_values[2].item()
-
-def _run_pytorch_benchmark(stmt_fn, globals_dict, label, description):
-    """
-    Run benchmark using PyTorch's benchmark module.
-    
-    Args:
-        stmt_fn: Function to benchmark
-        globals_dict: Dictionary containing function and variables
-        label: Label for the benchmark
-        description: Description for the benchmark
-    
-    Returns:
-        Tuple of (median, 20th_percentile, 80th_percentile) in milliseconds
-    """
-    # Create timer with appropriate settings
-    timer = benchmark.Timer(
-        stmt='stmt_fn()',
-        globals=globals_dict,
-        label=label,
-        description=description,
-        num_threads=1,  # Single threaded for consistent results
-    )
-    
-    # Run benchmark with adaptive timing
-    measurement = timer.blocked_autorange()
-    
-    # Extract quantiles
-    return _extract_quantiles_from_measurement(measurement, QUANTILES)
+# -----------------------------------------------------------------------------
+# Removed torch.utils.benchmark utilities. We now rely on Triton's do_bench
+# which offers quantile statistics directly.
+# -----------------------------------------------------------------------------
 
 def bench_speed_layer_norm(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput:
     N = input.x
@@ -97,11 +52,11 @@ def bench_speed_layer_norm(input: SingleBenchmarkRunInput) -> SingleBenchmarkRun
     torch.cuda.synchronize()
 
     if mode == "forward":
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             y_fwd,
-            {'stmt_fn': y_fwd, 'x': x},
-            label=f"LayerNorm Forward ({provider})",
-            description=f"M={M}, N={N}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     elif mode == "backward":
         y = y_fwd()
@@ -109,12 +64,11 @@ def bench_speed_layer_norm(input: SingleBenchmarkRunInput) -> SingleBenchmarkRun
         for _ in range(5):
             y_fwd().backward(dy, retain_graph=True)
         torch.cuda.synchronize()
-        backward_fn = lambda: y.backward(dy, retain_graph=True)
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
-            backward_fn,
-            {'stmt_fn': backward_fn, 'x': x, 'y': y, 'dy': dy},
-            label=f"LayerNorm Backward ({provider})",
-            description=f"M={M}, N={N}, dtype={dtype}",
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
+            lambda: y.backward(dy, retain_graph=True),
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     elif mode == "full":
         def full():
@@ -126,18 +80,20 @@ def bench_speed_layer_norm(input: SingleBenchmarkRunInput) -> SingleBenchmarkRun
             full()
         torch.cuda.synchronize()
 
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             full,
-            {'stmt_fn': full, 'x': x, 'dy': dy},
-            label=f"LayerNorm Full ({provider})",
-            description=f"M={M}, N={N}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
 
-    return SingleBenchmarkRunOutput(
-        y_20=ms_20,
-        y_50=ms_50,
-        y_80=ms_80,
-    )
+    # Fail fast if Triton produced any None metrics
+    if any(val is None for val in (ms_20, ms_50, ms_80)):
+        raise RuntimeError(
+            f"Benchmark speed result is None: ms_20={ms_20}, ms_50={ms_50}, ms_80={ms_80}"
+        )
+
+    return SingleBenchmarkRunOutput(y_20=ms_20, y_50=ms_50, y_80=ms_80)
 
 """
 def bench_memory_layer_norm(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput:

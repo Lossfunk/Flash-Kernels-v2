@@ -7,7 +7,7 @@ visualisation.
 """
 
 import torch
-import torch.utils.benchmark as benchmark
+import triton  # Use Triton's built-in benchmarking utility
 import sys
 import os
 
@@ -28,36 +28,8 @@ from new_kernels.diagonal_matmul.Functional.diagonal_matmul import DiagonalMatMu
 
 device = infer_device()
 
-def _extract_quantiles_from_measurement(measurement, quantiles: list[float] = [0.5, 0.2, 0.8]):
-    """Extract selected quantiles (in ms) from a torch.utils.benchmark.Measurement."""
-    # Convert seconds to milliseconds
-    times_ms = [t * 1000 for t in measurement.raw_times]
-    times_tensor = torch.tensor(times_ms, dtype=torch.float32)
-
-    quantile_values = torch.quantile(times_tensor, torch.tensor(quantiles, dtype=torch.float32))
-    return (
-        quantile_values[0].item(),
-        quantile_values[1].item(),
-        quantile_values[2].item(),
-    )
-
-
-def _run_pytorch_benchmark(stmt_fn, globals_dict, label: str, description: str):
-    """Utility that wraps torch.utils.benchmark for adaptive timing benchmarking."""
-    timer = benchmark.Timer(
-        stmt="stmt_fn()",
-        globals=globals_dict,
-        label=label,
-        description=description,
-        num_threads=1,  # single-threaded for reproducible results
-    )
-
-    measurement = timer.blocked_autorange()
-    return _extract_quantiles_from_measurement(measurement, QUANTILES)
-
-
 # -----------------------------------------------------------------------------
-# SPEED BENCHMARKS
+# Replaced torch.utils.benchmark utilities with Triton's do_bench for timing.
 # -----------------------------------------------------------------------------
 
 def bench_speed_diag_matmul(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput:
@@ -80,7 +52,7 @@ def bench_speed_diag_matmul(input: SingleBenchmarkRunInput) -> SingleBenchmarkRu
     diag_mm = DiagonalMatMul().to(device)
 
     def y_fwd():
-        if provider == "liger" or provider == "custom":
+        if provider == "custom":
             return diag_mm(a, B)
         if provider == "torch":
             return a.unsqueeze(-1) * B
@@ -92,11 +64,11 @@ def bench_speed_diag_matmul(input: SingleBenchmarkRunInput) -> SingleBenchmarkRu
         torch.cuda.synchronize()
 
     if mode == "forward":
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             y_fwd,
-            {"stmt_fn": y_fwd, "a": a, "B": B},
-            label=f"DiagMatMul Forward ({provider})",
-            description=f"N={N}, M={M}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[a, B],
+            rep=500,
         )
     elif mode == "backward":
         y = y_fwd()
@@ -106,12 +78,11 @@ def bench_speed_diag_matmul(input: SingleBenchmarkRunInput) -> SingleBenchmarkRu
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
-        backward_fn = lambda: y.backward(dy, retain_graph=True)
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
-            backward_fn,
-            {"stmt_fn": backward_fn, "y": y, "dy": dy},
-            label=f"DiagMatMul Backward ({provider})",
-            description=f"N={N}, M={M}, dtype={dtype}",
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
+            lambda: y.backward(dy, retain_graph=True),
+            quantiles=QUANTILES,
+            grad_to_none=[a, B],
+            rep=500,
         )
     elif mode == "full":
         def full():
@@ -124,14 +95,20 @@ def bench_speed_diag_matmul(input: SingleBenchmarkRunInput) -> SingleBenchmarkRu
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             full,
-            {"stmt_fn": full, "a": a, "B": B, "dy": dy},
-            label=f"DiagMatMul Full ({provider})",
-            description=f"N={N}, M={M}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[a, B],
+            rep=500,
         )
     else:
         raise ValueError(f"Unknown operation mode: {mode}")
+
+    # Fail fast if Triton produced None timings
+    if any(val is None for val in (ms_20, ms_50, ms_80)):
+        raise RuntimeError(
+            f"Benchmark speed result is None: ms_20={ms_20}, ms_50={ms_50}, ms_80={ms_80}"
+        )
 
     return SingleBenchmarkRunOutput(y_20=ms_20, y_50=ms_50, y_80=ms_80)
 
@@ -158,7 +135,7 @@ def bench_memory_diag_matmul(input: SingleBenchmarkRunInput) -> SingleBenchmarkR
     diag_mm = DiagonalMatMul().to(device)
 
     def y_fwd():
-        if provider == "liger" or provider == "custom":
+        if provider == "custom":
             return diag_mm(a, B)
         if provider == "torch":
             return a.unsqueeze(-1) * B
@@ -179,7 +156,7 @@ if __name__ == "__main__":
         x_name="N",
         x_label="rows",
         x_values=[128, 256, 512, 1024, 2048, 4096],
-        kernel_providers=["liger", "torch"],
+        kernel_providers=["custom", "torch"],
         extra_benchmark_configs=[
             {"M": 2048, "dtype": torch.float32},
             {"M": 2048, "dtype": torch.bfloat16},

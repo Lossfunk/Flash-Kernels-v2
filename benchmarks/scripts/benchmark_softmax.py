@@ -7,7 +7,6 @@ python benchmarks_visualizer.py \
 
 import torch
 import triton
-import torch.utils.benchmark as benchmark
 import sys
 import os
 
@@ -30,32 +29,10 @@ from new_kernels.softmax.Functional.softmax import Softmax
 device = infer_device()
 
 
-def _extract_quantiles_from_measurement(measurement, quantiles: list[float] = [0.5, 0.2, 0.8]):
-    """Extract selected quantiles (in ms) from a torch.utils.benchmark.Measurement."""
-    # Convert seconds to milliseconds
-    times_ms = [t * 1000 for t in measurement.raw_times]
-    times_tensor = torch.tensor(times_ms, dtype=torch.float32)
-
-    quantile_values = torch.quantile(times_tensor, torch.tensor(quantiles, dtype=torch.float32))
-    return (
-        quantile_values[0].item(),
-        quantile_values[1].item(),
-        quantile_values[2].item(),
-    )
-
-
-def _run_pytorch_benchmark(stmt_fn, globals_dict, label: str, description: str):
-    """Utility that wraps torch.utils.benchmark for adaptive timing benchmarking."""
-    timer = benchmark.Timer(
-        stmt="stmt_fn()",
-        globals=globals_dict,
-        label=label,
-        description=description,
-        num_threads=1,  # single-threaded for reproducible results
-    )
-
-    measurement = timer.blocked_autorange()
-    return _extract_quantiles_from_measurement(measurement, QUANTILES)
+# -----------------------------------------------------------------------------
+# NOTE: The generic torch.utils.benchmark utilities have been removed in favour
+# of Triton's built-in do_bench which directly returns the desired quantiles.
+# -----------------------------------------------------------------------------
 
 
 def bench_speed_softmax(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOutput:
@@ -69,18 +46,18 @@ def bench_speed_softmax(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOut
 
     x_shape = (M, N)
 
-    custom_sm = Softmax().to(device)
-    torch_sm = torch.nn.Softmax(dim=-1).to(device)
+    custom_softmax = Softmax().to(device).to(dtype)
+    torch_softmax = torch.nn.Softmax(dim=-1).to(device).to(dtype)
 
     x = torch.randn(x_shape, dtype=dtype, device=device)
     dy = torch.randn_like(x)
     x.requires_grad_(True)
 
     def y_fwd():
-        if provider == "liger" or provider == "custom":
-            return custom_sm(x)
+        if provider == "custom":
+            return custom_softmax(x)
         if provider == "torch":
-            return torch_sm(x)
+            return torch_softmax(x)
 
     # Warm-up to stabilise GPU clocks
     for _ in range(5):
@@ -89,46 +66,41 @@ def bench_speed_softmax(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOut
         torch.cuda.synchronize()
 
     if mode == "forward":
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             y_fwd,
-            {"stmt_fn": y_fwd, "x": x},
-            label=f"Softmax Forward ({provider})",
-            description=f"M={M}, N={N}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     elif mode == "backward":
         y = y_fwd()
-        # Warm-up backward
-        for _ in range(5):
-            y_fwd().backward(dy, retain_graph=True)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
 
-        backward_fn = lambda: y.backward(dy, retain_graph=True)
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
-            backward_fn,
-            {"stmt_fn": backward_fn, "x": x, "y": y, "dy": dy},
-            label=f"Softmax Backward ({provider})",
-            description=f"M={M}, N={N}, dtype={dtype}",
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
+            lambda: y.backward(dy, retain_graph=True),
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     elif mode == "full":
+
         def full():
             y = y_fwd()
             y.backward(dy, retain_graph=True)
 
-        # Warm-up full pass
-        for _ in range(5):
-            full()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-
-        ms_50, ms_20, ms_80 = _run_pytorch_benchmark(
+        ms_50, ms_20, ms_80 = triton.testing.do_bench(
             full,
-            {"stmt_fn": full, "x": x, "dy": dy},
-            label=f"Softmax Full ({provider})",
-            description=f"M={M}, N={N}, dtype={dtype}",
+            quantiles=QUANTILES,
+            grad_to_none=[x],
+            rep=500,
         )
     else:
         raise ValueError(f"Unknown kernel operation mode: {mode}")
+
+    # Sanity check – Triton returns `None` on warning/error. Fail fast.
+    if any(val is None for val in (ms_20, ms_50, ms_80)):
+        raise RuntimeError(
+            f"Benchmark speed result is None: ms_20={ms_20}, ms_50={ms_50}, ms_80={ms_80}"
+        )
 
     return SingleBenchmarkRunOutput(y_20=ms_20, y_50=ms_50, y_80=ms_80)
 
@@ -143,18 +115,18 @@ def bench_memory_softmax(input: SingleBenchmarkRunInput) -> SingleBenchmarkRunOu
 
     x_shape = (M, N)
 
-    custom_sm = Softmax().to(device)
-    torch_sm = torch.nn.Softmax(dim=-1).to(device)
+    custom_softmax = Softmax().to(device).to(dtype)
+    torch_softmax = torch.nn.Softmax(dim=-1).to(device).to(dtype)
 
     x = torch.randn(x_shape, dtype=dtype, device=device)
     dy = torch.randn_like(x)
     x.requires_grad_(True)
 
     def y_fwd():
-        if provider == "liger" or provider == "custom":
-            return custom_sm(x)
+        if provider == "custom":
+            return custom_softmax(x)
         if provider == "torch":
-            return torch_sm(x)
+            return torch_softmax(x)
 
     def full_pass():
         y = y_fwd()
@@ -172,7 +144,7 @@ if __name__ == "__main__":
         x_name="N",
         x_label="hidden size",
         x_values=[128, 256, 512, 1024, 2048, 4096],
-        kernel_providers=["liger", "torch"],
+        kernel_providers=["custom", "torch"],
         extra_benchmark_configs=[
             {"M": 2048, "dtype": torch.float32},
             {"M": 2048, "dtype": torch.bfloat16},
