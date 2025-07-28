@@ -3,7 +3,7 @@
 # run_layer_norm_speed.sh – end-to-end LayerNorm speed benchmark + SoL overlay
 # -----------------------------------------------------------------------------
 # 1. Runs benchmarks/scripts/benchmark_layer_norm.py for the forward path on
-#    both the custom Triton kernel and PyTorch reference implementation.
+#    both the custom CUDA kernel and PyTorch reference implementation.
 # 2. Generates an annotated plot with a speed-of-light (memory-bound lower-bound)
 #    line using the helper in scripts/plot_layer_norm_sol.py.
 # 3. Stores artefacts under benchmarks/output/ for easy retrieval.
