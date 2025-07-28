@@ -14,7 +14,6 @@ from typing import Callable, List, Optional, Union, Dict, Any
 
 import torch
 import triton
-import triton.language as tl
 
 QUANTILES = [0.5, 0.2, 0.8]
 
@@ -101,7 +100,7 @@ def calculate_settings(n):
     BLOCK_SIZE = triton.next_power_of_2(n)
     if BLOCK_SIZE > MAX_FUSED_SIZE:
         raise RuntimeError(
-            f"Cannot launch Triton kernel since n = {n} exceeds the recommended Triton blocksize = {MAX_FUSED_SIZE}."
+            f"Cannot launch kernel since n = {n} exceeds the recommended blocksize = {MAX_FUSED_SIZE}."
         )
 
     num_warps = 4
