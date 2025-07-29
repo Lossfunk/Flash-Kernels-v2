@@ -3,7 +3,7 @@
 # run_softmax_sol.sh – end-to-end Softmax speed benchmark + SoL overlay
 # -----------------------------------------------------------------------------
 # 1. Runs benchmarks/scripts/benchmark_softmax.py for the forward path on
-#    both the custom Triton kernel and PyTorch reference implementation.
+#    both the custom CUDA kernel and PyTorch reference implementation.
 # 2. Generates an annotated plot with a speed-of-light (memory-bound lower-bound)
 #    line using the helper in scripts/plot_softmax_sol.py.
 # 3. Stores artefacts under benchmarks/output/ for easy retrieval.

@@ -1,10 +1,10 @@
 # Flash-Kernels v2 – Quick Reference
 
-A lean playground for experimenting with **Triton** GPU kernels.
+A lean playground for experimenting with **CUDA** GPU kernels.
 
 Directory highlights
 1. `benchmarks/` – micro-benchmarks + visualisations
-2. `new_kernels/` – hand-tuned Triton ops (LayerNorm, Softmax, …)
+2. `new_kernels/` – hand-tuned CUDA kernels (LayerNorm, Softmax, …)
 3. `evals/` – PyTest correctness & regression suite
 4. `agents/` – LLM pipeline that auto-writes kernels for KernelBench
 
@@ -12,7 +12,7 @@ Directory highlights
 ## 1 · Installation
 ```bash
 python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt      # Triton ≥2,<3 + plotting + agent deps
+pip install -r requirements.txt      # Dependencies including Triton (for benchmarking), PyTorch, plotting libs
 ```
 GPU prerequisites
 * CUDA 11.8+ drivers
@@ -23,7 +23,7 @@ GPU prerequisites
 ```bash
 pytest -q evals       # FP32 + BF16 when supported
 ```
-Tests compare the Triton kernels against the PyTorch reference with strict
+Tests compare the CUDA kernels against the PyTorch reference with strict
 `assert_verbose_allclose` tolerances.
 
 ---
